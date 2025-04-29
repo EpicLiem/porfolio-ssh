@@ -29,8 +29,8 @@ jobs:
         with:
           context: . # Build context is the root of the repository
           push: true # Push the image after building
-          tags: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest # Tag format: ghcr.io/owner/repo:latest
+          tags: ghcr.io/${{ lower(github.repository_owner) }}/${{ github.event.repository.name }}:latest
           # You can add more tags here, e.g., based on commit SHA or Git tags
           # tags: |
-          #   ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
-          #   ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }} 
+          #   ghcr.io/${{ lower(github.repository_owner) }}/${{ lower(github.event.repository.name) }}:latest
+          #   ghcr.io/${{ lower(github.repository_owner) }}/${{ lower(github.event.repository.name) }}:${{ github.sha }} 
