@@ -259,7 +259,7 @@ var (
 type itemDelegate struct{}
 
 // Use a larger fixed Height, plus Spacing between items
-func (d itemDelegate) Height() int                               { return 5 } // Increased from 4
+func (d itemDelegate) Height() int                               { return 6 } // Increased from 4
 func (d itemDelegate) Spacing() int                              { return 1 } // Spacing BETWEEN items
 func (d itemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
 
@@ -609,6 +609,17 @@ func (m *model) View() string {
 		return "Initializing..."
 	}
 
+	// Adjust check to m.w < 55 due to observed 6-column offset
+	if m.w < 55 {
+		warningMsg := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("202")). // Orange/Red for warning
+			// Message refers to the perceived width needed
+			Render("Terminal width too narrow.\nPlease widen to at least 61 characters.")
+		// Remove the width info display from the warning
+		return lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Center, warningMsg)
+	}
+
 	if m.s == splash {
 		// Changed splash text
 		introText := " Liem Luttrell - Portfolio"
@@ -618,7 +629,7 @@ func (m *model) View() string {
 		return lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Center, splashStyle.Render(ui))
 	}
 
-	// --- Render Static Parts ---
+	// --- Render Static Parts (Only if width is sufficient) ---
 	headerText := "Liem Luttrell - SSH Portfolio"
 	renderedHeader := styleHeaderText.Render(headerText)
 	headerHeight := lipgloss.Height(renderedHeader)
@@ -645,6 +656,7 @@ func (m *model) View() string {
 	separatorLine := styleSeparatorLine.Render(strings.Repeat("─", m.w))
 	separatorLineHeight := 1
 
+	// Remove the width display from the help text
 	helpView := styleHelp.Render("←/→ or h/l: switch • ↑/↓: navigate • q: quit")
 	helpViewHeight := 1
 
