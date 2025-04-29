@@ -24,11 +24,19 @@ FROM alpine:latest
 # Set the working directory
 WORKDIR /root/
 
+# Create a directory for persistent data (like SSH keys)
+RUN mkdir /data
+
 # Copy the compiled binary from the builder stage
 COPY --from=builder /app/main .
 
+# Declare /data as a volume for persistent key storage
+VOLUME /data
+
 # Expose any necessary ports (if your app listens on a port)
 # EXPOSE 8080
+# Default SSH port for this application is 22 (can be overridden to 23234 with DEV_MODE=true)
+EXPOSE 22
 
 # Command to run the executable
 CMD ["./main"] 

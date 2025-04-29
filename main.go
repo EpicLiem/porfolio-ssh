@@ -1,24 +1,40 @@
 package main
 
 import (
-    "fmt"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
+	"errors"
+	"fmt"
 	"io"
-    "log"
-    "net"
-    "strconv"
-	"strings" // Needed for Join
-    "time"
+	"io/ioutil"
+	"log"
+	"net"
+	"os"
+	"strconv"
+	"strings"
+	"time"
 
-    tea "github.com/charmbracelet/bubbletea"
-    "github.com/charmbracelet/bubbles/list"
-    "github.com/charmbracelet/bubbles/spinner"
-    "github.com/charmbracelet/bubbles/viewport"
-    "github.com/charmbracelet/lipgloss"
-    wish "github.com/charmbracelet/wish"
-    "github.com/charmbracelet/wish/activeterm"
-    wb "github.com/charmbracelet/wish/bubbletea"
-    wl "github.com/charmbracelet/wish/logging"
-    "github.com/charmbracelet/ssh"
+	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	ssh "github.com/charmbracelet/ssh"
+	wish "github.com/charmbracelet/wish"
+	"github.com/charmbracelet/wish/activeterm"
+	wb "github.com/charmbracelet/wish/bubbletea"
+	wl "github.com/charmbracelet/wish/logging"
+	gossh "golang.org/x/crypto/ssh"
+)
+
+// --- Constants ---
+const (
+	keyDir         = "/data"
+	privateKeyPath = keyDir + "/ssh_host_ed25519_key"
+	publicKeyPath  = keyDir + "/ssh_host_ed25519_key.pub"
+	defaultPort    = "22"
+	devPort        = "23234"
 )
 
 // --- Data Structs ---
@@ -60,11 +76,11 @@ type listItemData interface {
 }
 
 // Implement FilterValue for each type
-func (e educationItem) FilterValue() string { return e.School }
+func (e educationItem) FilterValue() string  { return e.School }
 func (e experienceItem) FilterValue() string { return e.Company + " " + e.Role }
-func (p projectItem) FilterValue() string { return p.Name }
-func (s skillsItem) FilterValue() string { return s.Category }
-func (c contactItem) FilterValue() string { return c.Line }
+func (p projectItem) FilterValue() string    { return p.Name }
+func (s skillsItem) FilterValue() string     { return s.Category }
+func (c contactItem) FilterValue() string    { return c.Line }
 
 // --- Updated Résumé Data ---
 
@@ -79,11 +95,11 @@ var resumeData = map[string][]listItemData{
 	},
 	"Experience": {
 		experienceItem{
-			Company:  "Honeycake",
-			Dates:    "February 2025 - March 2025",
-			Role:     "Dev Ops Intern",
-			Location: "Philadelphia, PA",
-			Reporting:"Reported to Monica Quigg, Co-Founder / VP Engineering",
+			Company:   "Honeycake",
+			Dates:     "February 2025 - March 2025",
+			Role:      "Dev Ops Intern",
+			Location:  "Philadelphia, PA",
+			Reporting: "Reported to Monica Quigg, Co-Founder / VP Engineering",
 			Description: []string{
 				"Set up and deployed python api in Google Cloud Platform",
 				"Installed postgres database",
@@ -91,11 +107,11 @@ var resumeData = map[string][]listItemData{
 			},
 		},
 		experienceItem{
-			Company:  "Human Security",
-			Dates:    "January 2025",
-			Role:     "Data Analyst Intern",
-			Location: "New York, NY",
-			Reporting:"Reported to Francis Kitrick, Manager, Strategic Customer Research",
+			Company:   "Human Security",
+			Dates:     "January 2025",
+			Role:      "Data Analyst Intern",
+			Location:  "New York, NY",
+			Reporting: "Reported to Francis Kitrick, Manager, Strategic Customer Research",
 			Description: []string{
 				"Analyzed suspicious internet traffic to determine origin and whether it was malicious",
 				"Leveraged multiple RDBMS databases",
@@ -103,11 +119,11 @@ var resumeData = map[string][]listItemData{
 			},
 		},
 		experienceItem{
-			Company:  "Good-Loop.com (B Corp)",
-			Dates:    "June 2024 – August 2024",
-			Role:     "Software Development Intern",
-			Location: "Edinburgh, UK",
-			Reporting:"Worked directly under Craig Robertson, PhD, Head of Engineering",
+			Company:   "Good-Loop.com (B Corp)",
+			Dates:     "June 2024 – August 2024",
+			Role:      "Software Development Intern",
+			Location:  "Edinburgh, UK",
+			Reporting: "Worked directly under Craig Robertson, PhD, Head of Engineering",
 			Description: []string{
 				"Designed and implemented a headless web scraper using Playwright and python for the purpose of automating the classification of websites using AI.",
 				"Analyzed the features extracted through the web scraper with a Self Organizing Map",
@@ -115,11 +131,11 @@ var resumeData = map[string][]listItemData{
 			},
 		},
 		experienceItem{
-			Company:  "Seeds of Fortune (Non-Profit)",
-			Dates:    "June 2023 - August 2023",
-			Role:     "Software Development Intern",
-			Location: "Remote",
-			Reporting:"Reported to Executive Director Nitiya Walker",
+			Company:   "Seeds of Fortune (Non-Profit)",
+			Dates:     "June 2023 - August 2023",
+			Role:      "Software Development Intern",
+			Location:  "Remote",
+			Reporting: "Reported to Executive Director Nitiya Walker",
 			Description: []string{
 				"Created a gamified financial simulation using React and Next.js for the purpose of providing disadvantaged high school students the ability to create budgets for college life.",
 				"Implemented continuous revisions based on customer feedback",
@@ -243,8 +259,8 @@ var (
 type itemDelegate struct{}
 
 // Use a smaller fixed Height, plus Spacing between items
-func (d itemDelegate) Height() int  { return 4 } // Smaller fixed height
-func (d itemDelegate) Spacing() int { return 1 } // Spacing BETWEEN items
+func (d itemDelegate) Height() int                               { return 4 } // Smaller fixed height
+func (d itemDelegate) Spacing() int                              { return 1 } // Spacing BETWEEN items
 func (d itemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
 
 func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
@@ -261,7 +277,9 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		contentStyle = styleNormal
 	}
 	contentWidth := itemWidth - contentStyle.GetHorizontalFrameSize() - contentStyle.GetHorizontalPadding()
-	if contentWidth < 0 { contentWidth = 0 }
+	if contentWidth < 0 {
+		contentWidth = 0
+	}
 
 	var title, subtitle, details string
 	var finalContent string
@@ -300,7 +318,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		for i, detail := range d.Details {
 			detailsList[i] = "- " + detail
 		}
-		details = styleItemDesc.Copy().PaddingLeft(2).Width(contentWidth - 2).Render(strings.Join(detailsList, "\n")) 
+		details = styleItemDesc.Copy().PaddingLeft(2).Width(contentWidth - 2).Render(strings.Join(detailsList, "\n"))
 		finalContent = lipgloss.JoinVertical(lipgloss.Left, title, details)
 
 	case contactItem:
@@ -309,11 +327,11 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	}
 
 	// Remove the PaddingBottom(1) added previously
-	// contentStyle = contentStyle.PaddingBottom(1) 
+	// contentStyle = contentStyle.PaddingBottom(1)
 
 	// Apply selection styling (left border) or normal padding to the whole block
 	if index == m.Index() {
-		styledBlock := contentStyle.Render(finalContent) 
+		styledBlock := contentStyle.Render(finalContent)
 		fmt.Fprint(w, styledBlock)
 	} else {
 		styledBlock := contentStyle.Render(finalContent)
@@ -344,10 +362,10 @@ type model struct {
 
 func newModel() *model {
 	sp := spinner.New()
-	sp.Spinner = spinner.Pulse // Try pulse spinner
+	sp.Spinner = spinner.Pulse                                      // Try pulse spinner
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("78")) // Use the active green color
 	vp := viewport.New(0, 0)
-	
+
 	// Initialize list model here with defaults to prevent nil pointer panic
 	lst := list.New([]list.Item{}, itemDelegate{}, 0, 0) // Empty items, delegate, zero size
 	lst.SetShowHelp(false)
@@ -370,7 +388,9 @@ func (m *model) setSize(w, h int) {
 	separatorLineHeight := 1
 	helpViewHeight := 1
 	contentHeight := m.h - headerHeight - tabBarHeight - separatorLineHeight - helpViewHeight
-	if contentHeight < 1 { contentHeight = 1 }
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
 	contentWidth := m.w
 
 	m.lst.SetSize(contentWidth, contentHeight)
@@ -383,7 +403,9 @@ func (m *model) buildSkillsContent() string {
 	skillsData, _ := resumeData["Skills & Interests"]
 
 	contentWidth := m.vp.Width - styleItemDesc.GetHorizontalPadding()
-	if contentWidth < 0 { contentWidth = 0 }
+	if contentWidth < 0 {
+		contentWidth = 0
+	}
 
 	for i, itemData := range skillsData {
 		if skillsItem, ok := itemData.(skillsItem); ok {
@@ -393,7 +415,7 @@ func (m *model) buildSkillsContent() string {
 			for j, detail := range skillsItem.Details {
 				detailsList[j] = "- " + detail
 			}
-			details := styleItemDesc.Copy().PaddingLeft(2).Width(contentWidth).Render(strings.Join(detailsList, "\n")) 
+			details := styleItemDesc.Copy().PaddingLeft(2).Width(contentWidth).Render(strings.Join(detailsList, "\n"))
 			skillsBuilder.WriteString(details)
 			if i < len(skillsData)-1 {
 				skillsBuilder.WriteString("\n\n")
@@ -448,12 +470,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.rebuildList()
 				return m, nil
 			case "1", "2", "3", "4", "5":
-				 idx, err := strconv.Atoi(keyMsg.String())
-				 if err == nil && idx >= 1 && idx <= len(sectionOrder) {
-					 m.active = idx - 1
-					 m.rebuildList()
-					 return m, nil
-				 }
+				idx, err := strconv.Atoi(keyMsg.String())
+				if err == nil && idx >= 1 && idx <= len(sectionOrder) {
+					m.active = idx - 1
+					m.rebuildList()
+					return m, nil
+				}
 			}
 		}
 
@@ -506,7 +528,7 @@ func (m *model) rebuildList() {
 
 func (m *model) newList() list.Model {
 	activeSectionTitle := sectionOrder[m.active]
-	
+
 	var listItems []list.Item
 	if activeSectionTitle != "Skills & Interests" && activeSectionTitle != "Contact" {
 		itemsData, exists := resumeData[activeSectionTitle]
@@ -526,7 +548,9 @@ func (m *model) newList() list.Model {
 		separatorLineHeight := 1
 		helpViewHeight := 1
 		listHeight = m.h - headerHeight - tabBarHeight - separatorLineHeight - helpViewHeight
-		if listHeight < 1 { listHeight = 1 }
+		if listHeight < 1 {
+			listHeight = 1
+		}
 	}
 
 	l := list.New(listItems, d, m.w, listHeight)
@@ -543,8 +567,8 @@ func (m *model) newList() list.Model {
 
 var (
 	// Define styles specific to the View function (tabs, help, filler)
-	inactiveTabFg   = lipgloss.Color("248")
-	helpColor       = lipgloss.Color("241")
+	inactiveTabFg = lipgloss.Color("248")
+	helpColor     = lipgloss.Color("241")
 
 	// Base style for tabs
 	styleTabBase = lipgloss.NewStyle().Padding(0, 1)
@@ -555,22 +579,22 @@ var (
 
 	// Active tab: Use active color (green) foreground, bold, NO border or background
 	styleTabActive = styleTabBase.Copy().
-				Bold(true).
-				Foreground(activeTabColor)
+			Bold(true).
+			Foreground(activeTabColor)
 
 	// Filler has no background
 	styleFiller = lipgloss.NewStyle()
 
 	// Help text style
 	styleHelp = lipgloss.NewStyle().
-				Foreground(helpColor).
-				Padding(0, 1)
-	
+			Foreground(helpColor).
+			Padding(0, 1)
+
 	// Style for the header text above tabs
 	styleHeaderText = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("213")). // A magenta/pink color like Soft Serve title
-				Padding(1, 0, 0, 1) // Padding top/bottom/left
+			Bold(true).
+			Foreground(lipgloss.Color("213")). // A magenta/pink color like Soft Serve title
+			Padding(1, 0, 0, 1)                // Padding top/bottom/left
 
 	// Style for the separator line below tabs
 	styleSeparatorLine = lipgloss.NewStyle().
@@ -594,16 +618,16 @@ func (m *model) View() string {
 		return lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Center, splashStyle.Render(ui))
 	}
 
-	// --- Render Static Parts --- 
+	// --- Render Static Parts ---
 	headerText := "Liem Luttrell - SSH Portfolio"
 	renderedHeader := styleHeaderText.Render(headerText)
 	headerHeight := lipgloss.Height(renderedHeader)
 
-	var renderedTabStrings []string 
+	var renderedTabStrings []string
 	separator := lipgloss.NewStyle().Foreground(inactiveTabFg).Render(" | ")
 	for i, title := range sectionOrder {
 		style := styleTabInactive
-        if i == m.active {
+		if i == m.active {
 			style = styleTabActive
 		}
 		tabTitle := fmt.Sprintf("%d. %s", i+1, title)
@@ -611,7 +635,9 @@ func (m *model) View() string {
 	}
 	joinedTabs := strings.Join(renderedTabStrings, separator)
 	remainingWidth := m.w - lipgloss.Width(joinedTabs)
-	if remainingWidth < 0 { remainingWidth = 0 }
+	if remainingWidth < 0 {
+		remainingWidth = 0
+	}
 	filler := styleFiller.Copy().Width(remainingWidth).Render("")
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Bottom, joinedTabs, filler)
 	tabBarHeight := lipgloss.Height(tabBar)
@@ -622,12 +648,14 @@ func (m *model) View() string {
 	helpView := styleHelp.Render("←/→ or h/l: switch • ↑/↓: navigate • q: quit")
 	helpViewHeight := 1
 
-	// --- Calculate Content Area Dimensions --- 
+	// --- Calculate Content Area Dimensions ---
 	contentHeight := m.h - headerHeight - tabBarHeight - separatorLineHeight - helpViewHeight
-	if contentHeight < 1 { contentHeight = 1 }
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
 	contentWidth := m.w
 
-	// --- Render Content Area (Conditional) --- 
+	// --- Render Content Area (Conditional) ---
 	var contentView string
 	activeSectionTitle := sectionOrder[m.active]
 
@@ -657,20 +685,19 @@ func (m *model) View() string {
 		contentView = m.lst.View()
 	}
 
-	// --- Create Explicit Container for Content Area --- 
+	// --- Create Explicit Container for Content Area ---
 	contentAreaStyle := lipgloss.NewStyle().Width(contentWidth).Height(contentHeight)
 	renderedContentArea := contentAreaStyle.Render(contentView)
 
-	// --- Final Layout --- 
+	// --- Final Layout ---
 	return lipgloss.JoinVertical(lipgloss.Left,
-		renderedHeader, 
+		renderedHeader,
 		tabBar,
-		separatorLine, 
+		separatorLine,
 		renderedContentArea,
 		helpView,
 	)
 }
-
 
 // --- Wish boilerplate ---
 
@@ -678,13 +705,13 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	pty, _, active := s.Pty()
 	if !active {
 		fmt.Fprintln(s.Stderr(), "No active PTY required.") // Use Stderr
-		return nil, nil // Return nil model if no PTY
+		return nil, nil                                     // Return nil model if no PTY
 	}
-	
+
 	// Create model *after* potentially getting PTY dims
 	m := newModel()
 	// Initial dimensions might be 0, wait for WindowSizeMsg
-	m.w = pty.Window.Width 
+	m.w = pty.Window.Width
 	m.h = pty.Window.Height
 	if m.w > 0 && m.h > 0 {
 		m.gotSize = true // Mark size as received if PTY provided it
@@ -695,27 +722,100 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	return m, opts
 }
 
+// ensureHostKey checks if the host key pair exists, generating it if necessary.
+func ensureHostKey() error {
+	// Ensure the key directory exists
+	if err := os.MkdirAll(keyDir, 0700); err != nil {
+		return fmt.Errorf("failed to create key directory %s: %w", keyDir, err)
+	}
 
-func main() {
-	// Consider adding host key generation/loading if needed
-	// e.g., hostKey := wish.WithHostKeyPath(".ssh/soft_serve_server_key")
-    srv, err := wish.NewServer(
-        wish.WithAddress(net.JoinHostPort("0.0.0.0", "23234")),
-		// hostKey, // Add host key option if defined
-        wish.WithMiddleware(
-			// Order matters: BubbleTea middleware should run after PTY is set up
-			// but before logging potentially? Let's keep it first for now.
-            wb.Middleware(teaHandler),
-			activeterm.Middleware(), // Handles PTY requests
-            wl.Middleware(),
-        ),
-    )
-    if err != nil {
-		log.Fatalf("Could not create server: %v", err)
-    }
+	// Check if private key exists
+	_, err := os.Stat(privateKeyPath)
+	if err == nil {
+		// Key already exists, no action needed
+		return nil
+	}
 
-	log.Printf("Starting SSH server on port 23234...")
-	log.Printf("Connect with: ssh <user>@<host> -p 23234") // More generic connect string
-    log.Fatal(srv.ListenAndServe())
+	// If error is something other than "does not exist", return it
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to check for host key: %w", err)
+	}
+
+	// Key does not exist, generate a new one
+	log.Printf("Host key not found at %s. Generating new key pair...", privateKeyPath)
+
+	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("failed to generate key pair: %w", err)
+	}
+
+	// Convert the ed25519 private key to a format ssh.MarshalPrivateKey understands.
+	// The golang.org/x/crypto/ssh package handles this conversion internally
+	// when parsing, but marshalling requires the specific type.
+	// We need to use the PEM block structure recognised by OpenSSH.
+	opensshPrivKey, err := gossh.MarshalPrivateKey(privKey, "") // Use aliased package
+	if err != nil {
+		return fmt.Errorf("failed to marshal private key: %w", err)
+	}
+
+	// Write private key file (ensure correct permissions)
+	err = ioutil.WriteFile(privateKeyPath, pem.EncodeToMemory(opensshPrivKey), 0600) // Read/Write for owner only
+	if err != nil {
+		return fmt.Errorf("failed to write private key: %w", err)
+	}
+	log.Printf("Wrote private host key to %s", privateKeyPath)
+
+	// Generate public key bytes in authorized_keys format
+	sshPubKey, err := gossh.NewPublicKey(pubKey) // Use aliased package
+	if err != nil {
+		return fmt.Errorf("failed to create ssh public key: %w", err)
+	}
+	pubKeyBytes := gossh.MarshalAuthorizedKey(sshPubKey) // Use aliased package
+
+	// Write public key file
+	err = ioutil.WriteFile(publicKeyPath, pubKeyBytes, 0644) // Read for all, write for owner
+	if err != nil {
+		// Attempt to clean up private key if public key write fails
+		_ = os.Remove(privateKeyPath)
+		return fmt.Errorf("failed to write public key: %w", err)
+	}
+	log.Printf("Wrote public host key to %s", publicKeyPath)
+
+	return nil
 }
 
+func main() {
+	// Determine port based on DEV_MODE environment variable
+	port := defaultPort
+	if os.Getenv("DEV_MODE") != "" {
+		port = devPort
+		log.Println("DEV_MODE detected, using development port:", port)
+	} else {
+		log.Println("Using default port:", port)
+	}
+
+	// Ensure host key exists or generate a new one
+	if err := ensureHostKey(); err != nil {
+		log.Fatalf("Failed to ensure host key: %v", err)
+	}
+
+	// Use the generated/existing host key
+	hostKeyOpt := wish.WithHostKeyPath(privateKeyPath)
+
+	srv, err := wish.NewServer(
+		wish.WithAddress(net.JoinHostPort("0.0.0.0", port)), // Use determined port
+		hostKeyOpt, // Use the host key option
+		wish.WithMiddleware(
+			wb.Middleware(teaHandler),
+			activeterm.Middleware(),
+			wl.Middleware(),
+		),
+	)
+	if err != nil {
+		log.Fatalf("Could not create server: %v", err)
+	}
+
+	log.Printf("Starting SSH server on port %s...", port)     // Use determined port in log
+	log.Printf("Connect with: ssh <user>@<host> -p %s", port) // Use determined port in log
+	log.Fatal(srv.ListenAndServe())
+}
