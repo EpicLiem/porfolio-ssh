@@ -258,8 +258,8 @@ var (
 
 type itemDelegate struct{}
 
-// Use a smaller fixed Height, plus Spacing between items
-func (d itemDelegate) Height() int                               { return 4 } // Smaller fixed height
+// Use a larger fixed Height, plus Spacing between items
+func (d itemDelegate) Height() int                               { return 5 } // Increased from 4
 func (d itemDelegate) Spacing() int                              { return 1 } // Spacing BETWEEN items
 func (d itemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
 
