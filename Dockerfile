@@ -30,6 +30,11 @@ RUN mkdir /data
 # Copy the compiled binary from the builder stage
 COPY --from=builder /app/main .
 
+# ─── install terminfo & tput ───────────────────────────────────────────────────
+# ncurses provides the `tput` utility; ncurses-terminfo brings in /usr/share/terminfo
+RUN apk add --no-cache ncurses ncurses-terminfo
+# ────────────────────────────────────────────────────────────────────────────────
+
 # Declare /data as a volume for persistent key storage
 VOLUME /data
 
@@ -39,4 +44,4 @@ VOLUME /data
 EXPOSE 22
 
 # Command to run the executable
-CMD ["./main"] 
+CMD ["./main"]
