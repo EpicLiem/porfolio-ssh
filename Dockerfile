@@ -35,6 +35,9 @@ COPY --from=builder /app/main .
 RUN apk add --no-cache ncurses ncurses-terminfo
 # ────────────────────────────────────────────────────────────────────────────────
 
+# Ensure that the color is set to 256
+ENV TERM=xterm-256color
+
 # Declare /data as a volume for persistent key storage
 VOLUME /data
 
